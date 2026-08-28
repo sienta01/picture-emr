@@ -1,0 +1,8 @@
+# Patient data — never commit this.
+data/
+backups/
+
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

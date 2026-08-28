@@ -1,0 +1,1254 @@
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --text: #101722;
+  --muted: #5c6b7f;
+  --faint: #8b98a9;
+  --border: #dfe5ec;
+  --border-strong: #c6d0dc;
+  --accent: #0d6ec9;
+  --accent-soft: #e7f1fc;
+  /* Chart columns. Its own token rather than --accent because a filled mark is
+     judged against the surface it sits on, not against text — and on a dark card
+     --accent is a shade too light to hold that job. */
+  --chart-bar: #0d6ec9;
+  --danger: #c62f36;
+  --danger-soft: #fdeced;
+  --ok: #1a7f4b;
+  --ok-soft: #e6f5ec;
+  --warn: #a8620b;
+  --warn-soft: #fdf1df;
+  --shadow: 0 1px 2px rgba(16, 23, 34, 0.06), 0 4px 14px rgba(16, 23, 34, 0.05);
+  --radius: 10px;
+  --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1319;
+    --surface: #161d26;
+    --surface-2: #1c242f;
+    --text: #e9eef5;
+    --muted: #9aa8b9;
+    --faint: #6f7d8f;
+    --border: #27313d;
+    --border-strong: #384453;
+    --accent: #4d9ae8;
+    --accent-soft: #17293c;
+    --chart-bar: #4794e2;
+    --danger: #f2777d;
+    --danger-soft: #35191c;
+    --ok: #58c98c;
+    --ok-soft: #14291d;
+    --warn: #e0a34a;
+    --warn-soft: #2e2314;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+a { color: var(--accent); }
+
+/* ------------------------------------------------------------------ layout */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 20px;
+  height: 58px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.brand svg { flex: none; }
+
+.nav {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.nav::-webkit-scrollbar { display: none; }
+
+.nav a {
+  padding: 7px 13px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.nav a:hover { background: var(--surface-2); color: var(--text); }
+.nav a.active { background: var(--accent-soft); color: var(--accent); }
+
+.topbar-user {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.who-link {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+}
+.who-link:hover { background: var(--surface-2); color: var(--text); }
+.who-link.active { background: var(--accent-soft); color: var(--accent); }
+
+input:disabled, select:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+
+.sub {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+/* ------------------------------------------------------------------ pieces */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 15px;
+  min-height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { filter: brightness(1.08); background: var(--accent); }
+
+.btn-danger { color: var(--danger); border-color: transparent; background: var(--danger-soft); }
+.btn-danger:hover { background: var(--danger-soft); filter: brightness(0.96); }
+
+.btn-sm { min-height: 32px; padding: 5px 11px; font-size: 13px; }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+label, .label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+input[type="text"],
+input[type="date"],
+input[type="time"],
+input[type="number"],
+input[type="search"],
+input[type="password"],
+select,
+textarea {
+  width: 100%;
+  padding: 9px 11px;
+  min-height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+textarea {
+  min-height: 140px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.field { margin-bottom: 14px; }
+.field-hint { margin-top: 5px; font-size: 12px; color: var(--faint); }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 14px; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.seg button {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.badge-in { background: var(--accent-soft); color: var(--accent); }
+.badge-out { background: var(--ok-soft); color: var(--ok); }
+.badge-open { background: var(--warn-soft); color: var(--warn); }
+.badge-lead { background: var(--ok-soft); color: var(--ok); }
+.badge-shared { background: var(--accent-soft); color: var(--accent); }
+.badge-consult { background: var(--warn-soft); color: var(--warn); }
+.badge-died { background: var(--danger-soft); color: var(--danger); }
+
+/* Who we have asked to see this patient. An arrow rather than a word, because
+   it sits in a run of details that is already dense and the direction is the
+   whole meaning: care going out from us, not arriving. */
+.consulted { color: var(--accent); }
+
+/* How long a patient has gone unseen. Deliberately quiet — it is there to be
+   found when scanning for gaps, not to shout on every row that has one. */
+.stale { color: var(--warn); }
+
+/* The ward-round tick, sitting inside a row that is itself a link. Sized for a
+   thumb on a phone held over a bed, and kept visually lighter than the record
+   behind it: ticking is the small act, opening the chart is the large one. */
+.round-btn {
+  margin-top: 7px;
+  padding: 5px 10px;
+  min-height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.round-btn:hover { border-color: var(--ok); color: var(--ok); }
+.round-btn.on {
+  background: var(--ok-soft);
+  border-color: transparent;
+  color: var(--ok);
+}
+.round-btn:disabled { opacity: 0.55; cursor: default; }
+
+/* A date input paired with an action — the Clear button beside the discharge
+   date, which is the only way to empty one on a phone. */
+.input-row { display: flex; gap: 8px; align-items: center; }
+.input-row input { flex: 1; min-width: 0; }
+
+/* Boxed off from the fields around it, so ticking Deceased is a deliberate act
+   and not something a thumb does on the way past. */
+.death-block {
+  margin-bottom: 14px;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.death-block .check { margin-bottom: 2px; }
+.death-block .check label { font-weight: 600; }
+.death-block .field:first-child { margin-top: 12px; }
+.death-block .grid-2 { margin-top: 12px; }
+.death-block .field:last-of-type { margin-bottom: 0; }
+
+.mr {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------- lists */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.stat { padding: 14px 16px; }
+.stat .n { font-size: 26px; font-weight: 660; letter-spacing: -0.03em; }
+.stat .k { font-size: 12.5px; color: var(--muted); }
+
+/* ------------------------------------------------------------------- chart */
+
+.chart-card { padding: 16px 18px 12px; margin-bottom: 20px; }
+
+.chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  /* Room for the value sitting above the tallest column, which overhangs the
+     top of the plot whenever a day lands exactly on the top of the scale. */
+  margin-bottom: 24px;
+}
+.chart-head h2 { margin: 0 0 3px; font-size: 14px; }
+.chart-head .sub { margin: 0; font-size: 12.5px; }
+/* Reuses the .seg control the type toggles already use, at a size that sits in a
+   card header rather than at the top of a form. */
+.chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.chart-controls .seg button { padding: 5px 11px; font-size: 12.5px; }
+
+.chart-body { display: flex; gap: 10px; transition: opacity 0.18s; }
+.chart-body.loading { opacity: 0.45; }
+
+.chart-y, .chart-plot { position: relative; height: 132px; }
+.chart-y { flex: none; width: 22px; }
+.chart-y span {
+  position: absolute;
+  right: 0;
+  /* The label is centred on its gridline rather than resting above it. */
+  transform: translateY(50%);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.chart-plot { flex: 1; min-width: 0; }
+
+.gridline { position: absolute; left: 0; right: 0; height: 1px; background: var(--border); }
+
+.chart-cols {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2px;
+}
+/* The column, not the bar, is what a finger aims at: an empty day has nothing
+   drawn and a quiet one is three pixels tall. */
+.chart-col-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 24px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.chart-col-slot:hover { background: var(--accent-soft); }
+.chart-col-slot:focus-visible { background: var(--accent-soft); outline: 2px solid var(--accent); }
+
+.chart-col {
+  position: relative;
+  width: 100%;
+  min-height: 2px;
+  /* Rounded at the data end, square on the baseline — and never rounder than
+     the column is wide, or ninety days on a phone reads as a row of lollipops. */
+  border-radius: min(4px, 25%) min(4px, 25%) 0 0;
+  background: var(--chart-bar);
+}
+.chart-col-val {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tip {
+  position: absolute;
+  z-index: 2;
+  transform: translateX(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.chart-tip b { display: block; font-size: 13px; font-weight: 620; }
+.chart-tip span { font-size: 11.5px; color: var(--muted); }
+
+.chart-x {
+  display: flex;
+  justify-content: space-between;
+  /* Lines the first and last date up with the first and last column. */
+  padding-left: 32px;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.chart-note {
+  padding: 46px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chart-table { margin-top: 12px; }
+.chart-table summary {
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chart-rows-scroll { max-height: 210px; overflow-y: auto; }
+.chart-rows { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.chart-rows th, .chart-rows td {
+  padding: 5px 2px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-weight: 400;
+  color: var(--muted);
+}
+.chart-rows td { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+/* The page's table styling is written for a header row along the top. These are
+   row headers down the side, so the sticky uppercase treatment comes back off. */
+.chart-rows th {
+  position: static;
+  background: none;
+  font-size: inherit;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.toolbar .search { flex: 1; min-width: 210px; }
+
+.enc-list { display: flex; flex-direction: column; gap: 8px; }
+
+.enc-section + .enc-section { margin-top: 22px; }
+.enc-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+.enc-section-head h2 { margin: 0; font-size: 14px; }
+.enc-section-head .sub { margin: 0; font-size: 12.5px; }
+
+.enc {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+.enc:hover { border-color: var(--accent); background: var(--surface-2); }
+
+.enc-main { flex: 1; min-width: 0; }
+.enc-name {
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.enc-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.enc-dx {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.enc-side { text-align: right; flex: none; }
+.enc-date { font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+.pills { display: flex; gap: 5px; margin-top: 6px; justify-content: flex-end; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.pill.has { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+
+.empty {
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+.empty p { margin: 0 0 4px; }
+
+/* ------------------------------------------------------------------ detail */
+
+/* minmax(0, …) rather than 1fr: a grid track defaults to being at least as wide
+   as its content's minimum, and the four tab labels below are wider than a
+   phone. Without this the track blows out, .tabs never gets to scroll, and the
+   whole record screen slides sideways with the right-hand controls off-screen. */
+.detail { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 18px; align-items: start; }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button {
+  padding: 9px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.tabs .count {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+}
+.tabs button.on .count { background: var(--accent-soft); }
+
+.drop {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 22px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface-2);
+  margin-bottom: 16px;
+}
+.drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.drop .row { justify-content: center; }
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.shot {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.shot-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: var(--surface-2);
+  cursor: zoom-in;
+  border: 0;
+  padding: 0;
+}
+.shot-pdf {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  border: 0;
+}
+/* Reordering controls sit over the photo so they cost no height in a grid that
+   is already tight on a phone. */
+.shot-num {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.72);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.shot-order {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.72);
+}
+.shot-order button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.shot-order button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.22); }
+.shot-order button:disabled { opacity: 0.35; cursor: default; }
+
+.shot-grab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 28px;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Without this a finger dragging the handle scrolls the page instead. */
+  touch-action: none;
+}
+.shot-grab:active { cursor: grabbing; }
+
+.shot.dragging { opacity: 0.45; }
+.shot.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.shot-foot { padding: 7px 9px; border-top: 1px solid var(--border); }
+.shot-cap {
+  width: 100%;
+  border: 0;
+  padding: 2px 0;
+  min-height: 0;
+  background: transparent;
+  font-size: 12.5px;
+}
+.shot-cap:focus { outline-offset: 2px; }
+.shot-sub {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.shot-del,
+.shot-edit {
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+.shot-del:hover { color: var(--danger); }
+.shot-edit:hover { color: var(--accent); }
+
+/* ----------------------------------------------------- whole-patient chart */
+
+/* The caption on the patient's own chart is read, not written: pages are edited
+   on the record they belong to, where the rest of the controls are. Held to one
+   line so a long note cannot push one card taller than the rest of its row. */
+.shot-cap-static {
+  padding: 2px 0;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.chip:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.chip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip:disabled { opacity: 0.45; cursor: not-allowed; }
+.chip .count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+}
+/* The surface colour, not a white wash: on the dark theme the chip is already
+   dark and the count sits in accent blue, which a pale bubble swallows. */
+.chip.on .count { background: var(--surface); }
+
+.visit { padding: 0; overflow: hidden; }
+.visit + .visit { margin-top: 16px; }
+.visit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.visit-headings { min-width: 0; }
+.visit-title { font-size: 15px; font-weight: 640; letter-spacing: -0.01em; }
+.visit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.visit-dx { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.visit-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.visit-side .sub { margin: 0; }
+.visit-body { padding: 14px 16px 16px; }
+.visit-cat + .visit-cat { margin-top: 18px; }
+.visit-cat-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+  font-size: 11.5px;
+  font-weight: 660;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.visit-cat-head .count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  letter-spacing: 0;
+}
+
+/* One row per page in the batch, all visible from the start, under a line saying
+   which page of how many is going up — so a bar that stalls is obviously this
+   page's bar and not the whole upload. */
+.upload-batch {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.upload-summary {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.upload-row + .upload-row { border-top: 1px solid var(--border); }
+.upload-row.active { color: var(--text); }
+.upload-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-status {
+  flex: none;
+  min-width: 68px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.upload-row.done .upload-status { color: var(--ok); }
+.upload-row.failed { color: var(--danger); }
+.upload-row.failed .upload-status { color: var(--danger); text-align: left; }
+.upload-row.failed .bar i { background: var(--danger); }
+.upload-row.done .bar i { background: var(--ok); }
+
+.bar { flex: 1; min-width: 40px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
+
+/* --------------------------------------------------------------- lightbox */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  /* Solid, like the editor: handwriting on a chart photo is hard enough to read
+     without the form behind showing through it. */
+  background: #0b0f15;
+  display: flex;
+  flex-direction: column;
+}
+.lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  color: #e9eef5;
+  font-size: 13px;
+  /* Last resort: a bar that cannot fit drops onto a second row rather than
+     pushing Close off the side of the screen. */
+  flex-wrap: wrap;
+}
+.lightbox-bar button,
+.lightbox-bar .btn {
+  flex: none;
+  /* Without this the buttons squeeze until "‹ Prev" breaks across two lines. */
+  white-space: nowrap;
+}
+.lightbox-bar button {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 8px;
+  min-height: 36px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.lightbox-bar button:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* Basis 0, so the counter contributes nothing when the browser decides where to
+   break the line — flexbox wraps before it shrinks, and a long caption here was
+   enough to push Close onto a second row. It then grows into the leftover space,
+   which is what keeps the right-hand controls right-aligned. */
+.lb-label {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lightbox-stage {
+  flex: 1;
+  /* Zooming moves the picture with a transform, not by scrolling this box. */
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+.lightbox-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  /* The pinch maths scales about the middle of the picture and assumes it. */
+  transform-origin: center;
+}
+.lightbox-stage iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+
+/* Pinch, pan, swipe and double-tap are all handled in the page, so the browser
+   must not claim any of them first — a touch-action left open here is exactly
+   what stops a pinch ever reaching the image. A PDF keeps its own scrolling
+   viewer and never gets this class. */
+.lightbox-stage.gestures { touch-action: none; }
+.lightbox-stage.gestures img {
+  will-change: transform;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+.lightbox-stage.zoomed { cursor: grab; }
+.lightbox-stage.zoomed:active { cursor: grabbing; }
+
+.lightbox-hint {
+  display: none;
+  padding: 6px 14px 10px;
+  text-align: center;
+  color: rgba(233, 238, 245, 0.55);
+  font-size: 12px;
+}
+/* Only worth saying on a device that can actually swipe. */
+@media (hover: none) {
+  .lightbox-hint { display: block; }
+}
+
+/* --------------------------------------------------------------- editor */
+
+.editor {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  flex-direction: column;
+  /* Solid, not translucent: the form behind showing through made it hard to see
+     what was actually being cropped. */
+  background: #0b0f15;
+}
+.editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.editor-status { color: var(--muted); font-size: 12.5px; }
+
+.editor-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  overflow: hidden;
+}
+.editor-stage canvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.crop-box {
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  /* Everything outside the frame dims, without four separate shade elements. */
+  box-shadow: 0 0 0 9999px rgba(8, 12, 18, 0.6);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  background: #fff;
+  border-radius: 4px;
+  border: 2px solid var(--accent);
+  touch-action: none;
+}
+.crop-nw { top: -13px; left: -13px; cursor: nwse-resize; }
+.crop-ne { top: -13px; right: -13px; cursor: nesw-resize; }
+.crop-sw { bottom: -13px; left: -13px; cursor: nesw-resize; }
+.crop-se { bottom: -13px; right: -13px; cursor: nwse-resize; }
+
+.editor-hint {
+  padding: 8px 14px 12px;
+  text-align: center;
+  color: rgba(233, 238, 245, 0.6);
+  font-size: 12.5px;
+}
+
+/* ---------------------------------------------------------------- reports */
+
+.report-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+th {
+  background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--mono); font-size: 12.5px; color: var(--muted); width: 1%; }
+td.dx { white-space: pre-line; min-width: 220px; }
+td.nowrap { white-space: nowrap; }
+
+.check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text); }
+.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--accent); }
+.check label { margin: 0; font-size: 13.5px; font-weight: 450; color: var(--text); }
+
+/* ------------------------------------------------------------------- gate */
+
+.gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.gate .card { width: 100%; max-width: 400px; padding: 26px; }
+.gate h1 { font-size: 19px; margin-bottom: 4px; }
+
+.notice {
+  padding: 10px 13px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.notice-error { background: var(--danger-soft); color: var(--danger); }
+.notice-info { background: var(--accent-soft); color: var(--accent); }
+.notice-warn { background: var(--warn-soft); color: var(--warn); }
+/* Sits above the whole record, not inside a form — heavier than the rest. */
+.notice-death {
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13.5px;
+  font-weight: 600;
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+}
+
+/* ------------------------------------------------------------------ toast */
+
+#toasts {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13.5px;
+  font-weight: 500;
+  box-shadow: var(--shadow);
+  max-width: min(90vw, 460px);
+}
+.toast.err { background: var(--danger); color: #fff; }
+
+/* ----------------------------------------------------------------- mobile */
+
+@media (max-width: 860px) {
+  .detail { grid-template-columns: minmax(0, 1fr); }
+  main { padding: 18px 14px 80px; }
+  .topbar { padding: 0 14px; gap: 12px; }
+  .who-link { max-width: 90px; }
+  .grid-3 { grid-template-columns: 1fr 1fr; }
+  .enc { align-items: flex-start; }
+}
+
+/* On a phone the brand, three tabs, the account link and Sign out cannot share
+   one row. The tabs lose that fight first: they scroll out of sight with nothing
+   on screen to say they are there, which reads as Outpatient having vanished.
+   Give them their own full-width row underneath instead. */
+@media (max-width: 720px) {
+  .topbar {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 14px 0;
+  }
+  .brand { order: 1; }
+  .topbar-user { order: 2; margin-left: auto; }
+  .nav {
+    order: 3;
+    flex: 0 0 100%;
+    gap: 4px;
+    margin: 0 -14px;
+    padding: 5px 14px 6px;
+    border-top: 1px solid var(--border);
+  }
+  .nav a { flex: 1; text-align: center; padding: 8px 6px; }
+}
+
+@media (max-width: 560px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .gallery { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .enc-side { display: none; }
+}
+
+/* Six full labels will not fit across a phone, so the words go and the symbols
+   stay: ‹ › · Rotate · full size · ✕. */
+@media (max-width: 620px) {
+  .lb-word { display: none; }
+  .lightbox-bar { gap: 6px; padding: 8px 10px; }
+  .lightbox-bar button, .lightbox-bar .btn { padding: 6px 10px; }
+}
+
+/* Smallest phones: claw back enough width that Sign out never wraps onto the
+   tab row. Stays last so it wins the ties against the wider breakpoints above. */
+@media (max-width: 380px) {
+  .brand { font-size: 14px; gap: 6px; }
+  .who-link { max-width: 62px; padding: 6px 6px; }
+  .topbar-user .btn { padding: 5px 8px; }
+}
+
+@media print {
+  .topbar, .toolbar, .btn, .page-head .row, .chart-controls { display: none !important; }
+  body { background: #fff; }
+  .card, .report-table-wrap { border: 0; box-shadow: none; }
+}

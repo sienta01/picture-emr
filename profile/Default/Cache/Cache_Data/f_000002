@@ -1,0 +1,2125 @@
+// Picture EMR — single-page client. No framework, no build step.
+
+const CATEGORIES = [
+  { key: 'identity', label: 'Identity Page' },
+  { key: 'chart', label: 'Patient Chart' },
+  { key: 'lab', label: 'Lab' },
+  { key: 'radiology', label: 'Radiology' },
+];
+
+const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf';
+
+/**
+ * Who is carrying the patient. Both kinds of record have a leader; the second
+ * option differs because the situation does — an admission can be shared with
+ * the team that leads it, a clinic visit can be a consult another department
+ * asked for. `partner` is how the other party is introduced, and its presence is
+ * what makes naming them required.
+ */
+const CARE_STATUS = {
+  leader: { badge: 'LEADER', cls: 'badge-lead', long: () => 'Leader' },
+  shared: {
+    badge: 'SHARED CARE',
+    cls: 'badge-shared',
+    partner: 'led by',
+    long: (who) => `Shared care — led by ${who}`,
+  },
+  consult: {
+    badge: 'CONSULT',
+    cls: 'badge-consult',
+    partner: 'asked by',
+    long: (who) => `Consult — asked by ${who}`,
+  },
+};
+
+const CARE_OPTIONS = {
+  inpatient: [['', 'Not recorded'], ['leader', 'Leader'], ['shared', 'Shared care']],
+  outpatient: [['', 'Not recorded'], ['leader', 'Leader'], ['consult', 'Consult from another dept']],
+};
+
+const CARE_HINT = {
+  inpatient: 'Leader — this patient is ours. Shared care — another team leads and we consult.',
+  outpatient: 'Leader — this patient is ours. Consult — another department asked us to see them.',
+};
+
+const CARE_PARTNER_FIELD = {
+  shared: {
+    label: 'Who leads the care? *',
+    hint: 'The doctor or team carrying the case — required for shared care.',
+    placeholder: 'e.g. Dr Rahman — Cardiology',
+  },
+  consult: {
+    label: 'Which department asked? *',
+    hint: 'The department or doctor who asked for the consult — required.',
+    placeholder: 'e.g. Bedah — Dr Andi',
+  },
+};
+
+const state = {
+  user: null,
+  needsSetup: false,
+  today: '',
+  defaultRange: { from: '', to: '' },
+  compress: localStorage.getItem('emr.compress') !== 'off',
+};
+
+// ------------------------------------------------------------------- helpers
+
+const root = document.getElementById('root');
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === 'class') node.className = value;
+    else if (key === 'html') node.innerHTML = value;
+    else if (key === 'text') node.textContent = value;
+    else if (key.startsWith('on') && typeof value === 'function') {
+      node.addEventListener(key.slice(2).toLowerCase(), value);
+    } else if (key === 'dataset') Object.assign(node.dataset, value);
+    else if (value === true) node.setAttribute(key, '');
+    else node.setAttribute(key, value);
+  }
+  for (const child of children.flat(Infinity)) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+function toast(message, isError = false) {
+  const node = el('div', { class: `toast${isError ? ' err' : ''}`, text: message });
+  document.getElementById('toasts').append(node);
+  setTimeout(() => {
+    node.style.transition = 'opacity .3s';
+    node.style.opacity = '0';
+    setTimeout(() => node.remove(), 300);
+  }, isError ? 4200 : 2400);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: options.body ? { 'Content-Type': 'application/json' } : {},
+    ...options,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (res.status === 401 && !path.endsWith('/bootstrap')) {
+    state.user = null;
+    renderGate();
+    throw new Error('Please sign in.');
+  }
+  const data = res.headers.get('content-type')?.includes('json') ? await res.json() : {};
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function prettyDate(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${Number(d)} ${months[Number(m) - 1]} ${y}`;
+}
+
+function ageFrom(dob, onDate) {
+  if (!dob || !onDate) return null;
+  const [by, bm, bd] = dob.split('-').map(Number);
+  const [ry, rm, rd] = onDate.split('-').map(Number);
+  let age = ry - by;
+  if (rm < bm || (rm === bm && rd < bd)) age -= 1;
+  return age >= 0 && age < 150 ? age : null;
+}
+
+function typeLabel(type, plural = false) {
+  const base = type === 'inpatient' ? 'Inpatient' : 'Outpatient';
+  return plural ? `${base}s` : base;
+}
+
+function dateLabel(type) {
+  return type === 'inpatient' ? 'Admission date' : 'Visit date';
+}
+
+// --------------------------------------------------------------------- gate
+
+function renderGate() {
+  document.body.classList.add('gated');
+  root.replaceChildren(state.needsSetup ? setupCard() : loginCard());
+}
+
+function gateWrap(...children) {
+  return el('div', { class: 'gate' }, el('div', { class: 'card' }, ...children));
+}
+
+function loginCard() {
+  const error = el('div', { class: 'notice notice-error', style: 'display:none' });
+  const username = el('input', { type: 'text', id: 'u', autocomplete: 'username', autofocus: true });
+  const password = el('input', { type: 'password', id: 'p', autocomplete: 'current-password' });
+  const button = el('button', { class: 'btn btn-primary', type: 'submit', style: 'width:100%' }, 'Sign in');
+
+  const form = el(
+    'form',
+    {
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        button.disabled = true;
+        button.textContent = 'Signing in…';
+        try {
+          const data = await api('/api/login', {
+            method: 'POST',
+            body: { username: username.value, password: password.value },
+          });
+          state.user = data.user;
+          document.body.classList.remove('gated');
+          route();
+        } catch (err) {
+          error.textContent = err.message;
+          error.style.display = '';
+          password.value = '';
+          password.focus();
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Sign in';
+        }
+      },
+    },
+    el('h1', { text: 'Picture EMR' }),
+    el('p', { class: 'sub', style: 'margin-bottom:20px', text: 'Sign in to open patient records.' }),
+    error,
+    el('div', { class: 'field' }, el('label', { for: 'u', text: 'Username' }), username),
+    el('div', { class: 'field' }, el('label', { for: 'p', text: 'Password' }), password),
+    button
+  );
+
+  return gateWrap(form);
+}
+
+function setupCard() {
+  const error = el('div', { class: 'notice notice-error', style: 'display:none' });
+  const fullName = el('input', { type: 'text', id: 'fn', autocomplete: 'name' });
+  const username = el('input', { type: 'text', id: 'u', autocomplete: 'username', autofocus: true });
+  const password = el('input', { type: 'password', id: 'p', autocomplete: 'new-password' });
+  const confirm = el('input', { type: 'password', id: 'p2', autocomplete: 'new-password' });
+  const button = el('button', { class: 'btn btn-primary', type: 'submit', style: 'width:100%' }, 'Create account');
+
+  const form = el(
+    'form',
+    {
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        if (password.value !== confirm.value) {
+          error.textContent = 'The two passwords do not match.';
+          error.style.display = '';
+          return;
+        }
+        button.disabled = true;
+        try {
+          await api('/api/setup', {
+            method: 'POST',
+            body: {
+              username: username.value.trim().toLowerCase(),
+              password: password.value,
+              fullName: fullName.value,
+            },
+          });
+          state.needsSetup = false;
+          await bootstrap();
+          document.body.classList.remove('gated');
+          location.hash = '#/inpatient';
+          route();
+        } catch (err) {
+          error.textContent = err.message;
+          error.style.display = '';
+        } finally {
+          button.disabled = false;
+        }
+      },
+    },
+    el('h1', { text: 'Set up Picture EMR' }),
+    el('p', {
+      class: 'sub',
+      style: 'margin-bottom:20px',
+      text: 'This is the first run. Create the account you will use to sign in.',
+    }),
+    error,
+    el('div', { class: 'field' }, el('label', { for: 'fn', text: 'Your name' }), fullName),
+    el(
+      'div',
+      { class: 'field' },
+      el('label', { for: 'u', text: 'Username' }),
+      username,
+      el('div', { class: 'field-hint', text: 'Letters, numbers, dot, dash or underscore.' })
+    ),
+    el(
+      'div',
+      { class: 'field' },
+      el('label', { for: 'p', text: 'Password' }),
+      password,
+      el('div', { class: 'field-hint', text: 'At least 10 characters. Choose something only you know.' })
+    ),
+    el('div', { class: 'field' }, el('label', { for: 'p2', text: 'Confirm password' }), confirm),
+    button
+  );
+
+  return gateWrap(form);
+}
+
+// -------------------------------------------------------------------- shell
+
+function shell(view) {
+  const hash = location.hash || '#/inpatient';
+  const link = (href, label) =>
+    el('a', { href, class: hash.startsWith(href) ? 'active' : '', text: label });
+
+  root.replaceChildren(
+    el(
+      'header',
+      { class: 'topbar' },
+      el(
+        'div',
+        { class: 'brand' },
+        el('span', {
+          html:
+            '<svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">' +
+            '<rect width="32" height="32" rx="7" fill="currentColor" opacity=".12"/>' +
+            '<path d="M16 9v14M9 16h14" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg>',
+          style: 'color:var(--accent);display:flex',
+        }),
+        'Picture EMR'
+      ),
+      el('nav', { class: 'nav' }, link('#/inpatient', 'Inpatient'), link('#/outpatient', 'Outpatient'), link('#/reports', 'Reports')),
+      el(
+        'div',
+        { class: 'topbar-user' },
+        el('a', {
+          class: `who-link${hash.startsWith('#/account') ? ' active' : ''}`,
+          href: '#/account',
+          text: state.user?.fullName || state.user?.username || '',
+          title: 'Your account',
+        }),
+        el(
+          'button',
+          {
+            class: 'btn btn-sm btn-ghost',
+            onclick: async () => {
+              await api('/api/logout', { method: 'POST' });
+              state.user = null;
+              renderGate();
+            },
+          },
+          'Sign out'
+        )
+      )
+    ),
+    el('main', {}, view)
+  );
+}
+
+// --------------------------------------------------------------- list view
+
+async function listView(type) {
+  const container = el('div');
+  shell(container);
+
+  const search = el('input', {
+    type: 'search',
+    class: 'search',
+    placeholder: `Search ${typeLabel(type, true).toLowerCase()} by name, MR number or diagnosis…`,
+  });
+  const fromInput = el('input', { type: 'date' });
+  const toInput = el('input', { type: 'date' });
+  const results = el('div', { class: 'enc-list' });
+  const summary = el('div', { class: 'sub' });
+  const statsRow = el('div', { class: 'stats' });
+
+  let timer;
+  const debounced = () => {
+    clearTimeout(timer);
+    timer = setTimeout(load, 220);
+  };
+  search.addEventListener('input', debounced);
+  fromInput.addEventListener('change', load);
+  toInput.addEventListener('change', load);
+
+  container.replaceChildren(
+    el(
+      'div',
+      { class: 'page-head' },
+      el(
+        'div',
+        {},
+        el('h1', { text: typeLabel(type, true) }),
+        el('p', {
+          class: 'sub',
+          text:
+            type === 'inpatient'
+              ? 'Admitted patients and their scanned chart pages.'
+              : 'Clinic visits and their scanned chart pages.',
+        })
+      ),
+      el(
+        'a',
+        { class: 'btn btn-primary', href: `#/new/${type}` },
+        `+ New ${type === 'inpatient' ? 'admission' : 'visit'}`
+      )
+    ),
+    statsRow,
+    el(
+      'div',
+      { class: 'toolbar' },
+      search,
+      el('div', { class: 'row' }, el('span', { class: 'label', style: 'margin:0', text: 'From' }), fromInput),
+      el('div', { class: 'row' }, el('span', { class: 'label', style: 'margin:0', text: 'To' }), toInput),
+      el(
+        'button',
+        {
+          class: 'btn btn-sm btn-ghost',
+          onclick: () => {
+            search.value = '';
+            fromInput.value = '';
+            toInput.value = '';
+            load();
+          },
+        },
+        'Clear'
+      )
+    ),
+    summary,
+    el('div', { style: 'height:10px' }),
+    results
+  );
+
+  api('/api/stats')
+    .then((stats) => {
+      const card = (n, k) => el('div', { class: 'card stat' }, el('div', { class: 'n', text: String(n) }), el('div', { class: 'k', text: k }));
+      const cards = [
+        card(type === 'inpatient' ? stats.inpatient : stats.outpatient, `${typeLabel(type, true)} this month`),
+        card(stats.patients, 'Patients on file'),
+        card(stats.attachments, 'Pages stored'),
+      ];
+      // A clinic session is counted at the end of the day, so the day's own
+      // tally goes first — ahead of the running month.
+      if (type === 'outpatient' && stats.today) {
+        cards.unshift(card(stats.today.outpatient, 'Outpatients today'));
+      }
+      statsRow.replaceChildren(...cards);
+    })
+    .catch(() => {});
+
+  async function load() {
+    results.replaceChildren(el('div', { class: 'sub', text: 'Loading…' }));
+    const params = new URLSearchParams({ type, limit: '200' });
+    if (search.value.trim()) params.set('q', search.value.trim());
+    if (fromInput.value) params.set('from', fromInput.value);
+    if (toInput.value) params.set('to', toInput.value);
+    try {
+      const data = await api(`/api/encounters?${params}`);
+      summary.textContent = data.total
+        ? `${data.total} record${data.total === 1 ? '' : 's'}${data.total > data.items.length ? ` — showing the ${data.items.length} most recent` : ''}`
+        : '';
+      if (!data.items.length) {
+        results.replaceChildren(
+          el(
+            'div',
+            { class: 'empty' },
+            el('p', { text: search.value || fromInput.value || toInput.value ? 'No records match those filters.' : `No ${typeLabel(type, true).toLowerCase()} yet.` }),
+            el('p', { style: 'font-size:13px', text: 'Use the button above to add one.' })
+          )
+        );
+        return;
+      }
+      // Each list leads with the patients still in front of you — the ward's
+      // admitted patients, the clinic's visits from today — and puts the rest
+      // under its own heading, instead of leaving both mixed in one date-sorted
+      // pile you have to read through.
+      const split =
+        type === 'inpatient'
+          ? {
+              lead: data.items.filter((e) => !e.dischargeDate),
+              leadTitle: 'Admitted',
+              restTitle: 'Discharged',
+              noun: 'patient',
+            }
+          : {
+              lead: data.items.filter((e) => e.admissionDate === state.today),
+              leadTitle: `Today — ${prettyDate(state.today)}`,
+              restTitle: 'Earlier',
+              noun: 'visit',
+            };
+
+      if (!split.lead.length) {
+        results.replaceChildren(...data.items.map(encounterRow));
+        return;
+      }
+      const leading = new Set(split.lead.map((e) => e.id));
+      const rest = data.items.filter((e) => !leading.has(e.id));
+      results.replaceChildren(
+        listSection(split.leadTitle, split.lead, split.noun),
+        ...(rest.length ? [listSection(split.restTitle, rest, split.noun)] : [])
+      );
+    } catch (err) {
+      results.replaceChildren(el('div', { class: 'notice notice-error', text: err.message }));
+    }
+  }
+
+  load();
+}
+
+function listSection(title, items, noun) {
+  return el(
+    'div',
+    { class: 'enc-section' },
+    el(
+      'div',
+      { class: 'enc-section-head' },
+      el('h2', { text: title }),
+      el('span', { class: 'sub', text: `${items.length} ${noun}${items.length === 1 ? '' : 's'}` })
+    ),
+    el('div', { class: 'enc-list' }, ...items.map(encounterRow))
+  );
+}
+
+function encounterRow(enc) {
+  const pages = CATEGORIES.map((c) =>
+    el(
+      'span',
+      { class: `pill${enc.attachmentCounts[c.key] ? ' has' : ''}`, title: c.label },
+      `${c.label.split(' ')[0]} ${enc.attachmentCounts[c.key] || 0}`
+    )
+  );
+
+  const care = CARE_STATUS[enc.careRole];
+
+  const meta = [
+    el('span', { class: 'mr', text: enc.patient.mrNumber }),
+    el('span', { text: enc.patient.sex === 'M' ? 'Male' : 'Female' }),
+    enc.age !== null ? el('span', { text: `${enc.age} y` }) : null,
+    enc.ward ? el('span', { text: enc.ward }) : null,
+    // No ADMITTED badge: the list is split into Admitted and Discharged, so every
+    // row that would carry one already sits under a heading saying so.
+    care
+      ? el('span', {
+          class: `badge ${care.cls}`,
+          text: care.badge,
+          title: care.partner && enc.careLeader ? care.long(enc.careLeader) : '',
+        })
+      : null,
+    care && care.partner && enc.careLeader
+      ? el('span', { text: `${care.partner} ${enc.careLeader}` })
+      : null,
+  ].filter(Boolean);
+
+  const firstLines = (enc.diagnosis || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return el(
+    'a',
+    { class: 'enc', href: `#/e/${enc.id}` },
+    el(
+      'div',
+      { class: 'enc-main' },
+      el('div', { class: 'enc-name', text: enc.patient.name }),
+      el('div', { class: 'enc-meta' }, ...meta),
+      firstLines.length
+        ? el('div', {
+            class: 'enc-dx',
+            text: firstLines.join(' · '),
+            title: enc.diagnosis,
+          })
+        : el('div', { class: 'enc-dx', style: 'font-style:italic', text: 'No diagnosis recorded' })
+    ),
+    el(
+      'div',
+      { class: 'enc-side' },
+      el('div', { class: 'enc-date', text: prettyDate(enc.admissionDate) }),
+      enc.dischargeDate
+        ? el('div', { class: 'sub', style: 'font-size:12px', text: `dc ${prettyDate(enc.dischargeDate)}` })
+        : null,
+      el('div', { class: 'pills' }, ...pages)
+    )
+  );
+}
+
+// ------------------------------------------------------- identity form bits
+
+function identityFields(type, initial = {}) {
+  const mrNumber = el('input', { type: 'text', value: initial.mrNumber || '', placeholder: 'e.g. 00-12-34-56' });
+  const name = el('input', { type: 'text', value: initial.name || '', placeholder: 'Full name as written on the chart' });
+  const sex = el(
+    'select',
+    {},
+    el('option', { value: 'M', selected: (initial.sex || 'M') === 'M' }, 'Male'),
+    el('option', { value: 'F', selected: initial.sex === 'F' }, 'Female')
+  );
+  const dob = el('input', { type: 'date', value: initial.dob || '', max: state.today });
+  const ageManual = el('input', {
+    type: 'number',
+    min: '0',
+    max: '149',
+    placeholder: '—',
+    value: initial.ageManual ?? '',
+  });
+  const admissionDate = el('input', {
+    type: 'date',
+    value: initial.admissionDate || state.today,
+    max: state.today,
+  });
+  const dischargeDate = el('input', { type: 'date', value: initial.dischargeDate || '' });
+  const careRole = el('select', {});
+  const careLeader = el('input', { type: 'text', value: initial.careLeader || '' });
+  const ward = el('input', {
+    type: 'text',
+    value: initial.ward || '',
+    placeholder: type === 'inpatient' ? 'Ward / room' : 'Clinic / poly',
+  });
+  const diagnosis = el(
+    'textarea',
+    { placeholder: 'One diagnosis per line:\n\nCHF NYHA III\nDM type 2\nCKD stage 3' },
+    initial.diagnosis || ''
+  );
+
+  const ageHint = el('div', { class: 'field-hint' });
+  const refreshAge = () => {
+    const computed = ageFrom(dob.value, admissionDate.value);
+    if (computed !== null) {
+      ageHint.textContent = `Age at ${dateLabel(type).toLowerCase()}: ${computed} years — this is what the report will use.`;
+      ageManual.disabled = true;
+      ageManual.placeholder = String(computed);
+    } else {
+      ageManual.disabled = false;
+      ageManual.placeholder = '—';
+      ageHint.textContent = dob.value
+        ? 'Check the date of birth — it must be on or before the visit date.'
+        : 'No date of birth: the report will use the age typed here.';
+    }
+  };
+  dob.addEventListener('change', refreshAge);
+  admissionDate.addEventListener('change', refreshAge);
+  refreshAge();
+
+  // A phone's native date picker has no way to empty a field it has already
+  // filled, so a patient wrongly marked discharged could not be put back to
+  // admitted from the ward. This button is that undo.
+  const clearDischarge = el(
+    'button',
+    {
+      type: 'button',
+      class: 'btn btn-sm btn-ghost',
+      title: 'Clear the discharge date — puts the patient back to still admitted',
+      onclick: () => {
+        dischargeDate.value = '';
+        refreshDischarge();
+        dischargeDate.focus();
+      },
+    },
+    'Clear'
+  );
+
+  const dischargeHint = el('div', { class: 'field-hint' });
+  const refreshDischarge = () => {
+    clearDischarge.disabled = !dischargeDate.value;
+    dischargeHint.textContent = dischargeDate.value
+      ? 'Discharged. Use Clear to put this patient back to still admitted.'
+      : 'Leave empty while the patient is still admitted.';
+  };
+  dischargeDate.addEventListener('change', refreshDischarge);
+  refreshDischarge();
+
+  const dischargeField = el(
+    'div',
+    { class: 'field', style: type === 'inpatient' ? '' : 'display:none' },
+    el('label', { text: 'Discharge date' }),
+    el('div', { class: 'input-row' }, dischargeDate, clearDischarge),
+    dischargeHint
+  );
+
+  const careLeaderLabel = el('label', {});
+  const careLeaderHint = el('div', { class: 'field-hint' });
+  const careLeaderField = el('div', { class: 'field' }, careLeaderLabel, careLeader, careLeaderHint);
+  const careHint = el('div', { class: 'field-hint' });
+
+  // Only the statuses that name somebody else reveal the second field, and the
+  // wording follows the status — a leading team and a referring department are
+  // not the same thing to write down.
+  const refreshCare = () => {
+    const partner = CARE_PARTNER_FIELD[careRole.value];
+    careLeaderField.style.display = partner ? '' : 'none';
+    if (partner) {
+      careLeaderLabel.textContent = partner.label;
+      careLeaderHint.textContent = partner.hint;
+      careLeader.placeholder = partner.placeholder;
+    }
+  };
+
+  // Rebuilt on every type change: shared care has no clinic equivalent and a
+  // consult none on the ward, so a status the new kind of record does not offer
+  // falls back to blank rather than being saved as something it cannot mean.
+  const fillCareOptions = (nextType) => {
+    const chosen = careRole.value;
+    careRole.replaceChildren(
+      ...CARE_OPTIONS[nextType].map(([value, label]) => el('option', { value }, label))
+    );
+    careRole.value = chosen;
+    careHint.textContent = CARE_HINT[nextType];
+    refreshCare();
+  };
+
+  careRole.addEventListener('change', refreshCare);
+  fillCareOptions(type);
+  careRole.value = initial.careRole || '';
+  refreshCare();
+
+  const careBlock = el(
+    'div',
+    {},
+    el('div', { class: 'field' }, el('label', { text: 'Patient status' }), careRole, careHint),
+    careLeaderField
+  );
+
+  const admissionLabel = el('label', { text: `${dateLabel(type)} *` });
+  const wardLabel = el('label', { text: type === 'inpatient' ? 'Ward / room' : 'Clinic' });
+
+  const node = el(
+    'div',
+    {},
+    el(
+      'div',
+      { class: 'field' },
+      el('label', { text: 'MR number *' }),
+      mrNumber,
+      el('div', { class: 'field-hint', text: 'Reusing an existing MR number links this to the same patient.' })
+    ),
+    el('div', { class: 'field' }, el('label', { text: 'Name *' }), name),
+    el(
+      'div',
+      { class: 'grid-2' },
+      el('div', { class: 'field' }, el('label', { text: 'Sex *' }), sex),
+      el('div', { class: 'field' }, el('label', { text: 'Date of birth' }), dob)
+    ),
+    el('div', { class: 'field' }, el('label', { text: 'Age (only if DOB unknown)' }), ageManual, ageHint),
+    el('div', { class: 'field' }, admissionLabel, admissionDate),
+    dischargeField,
+    careBlock,
+    el('div', { class: 'field' }, wardLabel, ward),
+    el(
+      'div',
+      { class: 'field' },
+      el('label', { text: 'Diagnosis' }),
+      diagnosis,
+      el('div', { class: 'field-hint', text: 'Multi-line. Each line is kept exactly as typed in the CSV report.' })
+    )
+  );
+
+  return {
+    node,
+    setType(next) {
+      type = next;
+      dischargeField.style.display = next === 'inpatient' ? '' : 'none';
+      admissionLabel.textContent = `${dateLabel(next)} *`;
+      wardLabel.textContent = next === 'inpatient' ? 'Ward / room' : 'Clinic';
+      ward.placeholder = next === 'inpatient' ? 'Ward / room' : 'Clinic / poly';
+      refreshAge();
+      fillCareOptions(next);
+    },
+    fill(patient) {
+      name.value = patient.name;
+      sex.value = patient.sex;
+      dob.value = patient.dob || '';
+      ageManual.value = patient.ageManual ?? '';
+      refreshAge();
+    },
+    onMrBlur(handler) {
+      mrNumber.addEventListener('blur', () => handler(mrNumber.value.trim()));
+    },
+    value() {
+      return {
+        mrNumber: mrNumber.value.trim(),
+        name: name.value.trim(),
+        sex: sex.value,
+        dob: dob.value || null,
+        ageManual: ageManual.disabled || ageManual.value === '' ? null : Number(ageManual.value),
+        admissionDate: admissionDate.value,
+        dischargeDate: dischargeDate.value || null,
+        careRole: careRole.value,
+        careLeader: careLeader.value.trim(),
+        ward: ward.value.trim(),
+        diagnosis: diagnosis.value,
+      };
+    },
+    /** Returns a message to show, or null when the form is ready to send. */
+    validate() {
+      if (CARE_PARTNER_FIELD[careRole.value] && !careLeader.value.trim()) {
+        careLeader.focus();
+        return careRole.value === 'shared'
+          ? 'Shared care needs the name of the leading doctor or team.'
+          : 'A consult needs the department or doctor who asked for it.';
+      }
+      return null;
+    },
+    focusFirst() {
+      mrNumber.focus();
+    },
+  };
+}
+
+// ---------------------------------------------------------------- new record
+
+function newView(initialType) {
+  const container = el('div');
+  shell(container);
+
+  let type = initialType;
+  const error = el('div', { class: 'notice notice-error', style: 'display:none' });
+  const lookupNote = el('div', { class: 'field-hint', style: 'margin-bottom:12px' });
+  const fields = identityFields(type, {});
+
+  fields.onMrBlur(async (mr) => {
+    lookupNote.textContent = '';
+    lookupNote.className = 'field-hint';
+    if (!mr) return;
+    try {
+      const data = await api(`/api/patients/lookup?mr=${encodeURIComponent(mr)}`);
+      if (data.found) {
+        fields.fill(data.patient);
+        lookupNote.textContent = `Existing patient: ${data.patient.name} — ${data.visits} previous record${data.visits === 1 ? '' : 's'}. Identity filled in.`;
+        lookupNote.className = 'notice notice-info';
+      } else {
+        lookupNote.textContent = 'New MR number — a new patient will be created.';
+      }
+    } catch {
+      /* lookup is a convenience; failures are silent */
+    }
+  });
+
+  const typeToggle = el(
+    'div',
+    { class: 'seg' },
+    ...['inpatient', 'outpatient'].map((value) =>
+      el(
+        'button',
+        {
+          type: 'button',
+          class: type === value ? 'on' : '',
+          onclick: (event) => {
+            type = value;
+            [...typeToggle.children].forEach((b) => b.classList.remove('on'));
+            event.currentTarget.classList.add('on');
+            fields.setType(type);
+          },
+        },
+        typeLabel(value)
+      )
+    )
+  );
+
+  const save = el('button', { class: 'btn btn-primary', type: 'submit' }, 'Create record');
+
+  const form = el(
+    'form',
+    {
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        const payload = { ...fields.value(), type };
+        const problem = !payload.mrNumber || !payload.name
+          ? 'MR number and name are both required.'
+          : fields.validate();
+        if (problem) {
+          error.textContent = problem;
+          error.style.display = '';
+          return;
+        }
+        save.disabled = true;
+        save.textContent = 'Saving…';
+        try {
+          const enc = await api('/api/encounters', { method: 'POST', body: payload });
+          toast('Record created — add chart photos next.');
+          location.hash = `#/e/${enc.id}`;
+        } catch (err) {
+          error.textContent = err.message;
+          error.style.display = '';
+        } finally {
+          save.disabled = false;
+          save.textContent = 'Create record';
+        }
+      },
+    },
+    error,
+    lookupNote,
+    fields.node,
+    el(
+      'div',
+      { class: 'row', style: 'margin-top:6px' },
+      save,
+      el('a', { class: 'btn btn-ghost', href: `#/${type}` }, 'Cancel')
+    )
+  );
+
+  container.replaceChildren(
+    el(
+      'div',
+      { class: 'page-head' },
+      el('div', {}, el('h1', { text: 'New record' }), el('p', { class: 'sub', text: 'Identity page — you can attach chart photos on the next screen.' })),
+      typeToggle
+    ),
+    el('div', { class: 'card', style: 'max-width:620px' }, form)
+  );
+
+  fields.focusFirst();
+}
+
+// ------------------------------------------------------------- detail view
+
+async function detailView(id) {
+  const container = el('div');
+  shell(container);
+  container.replaceChildren(el('div', { class: 'sub', text: 'Loading record…' }));
+
+  let enc;
+  try {
+    enc = await api(`/api/encounters/${id}`);
+  } catch (err) {
+    container.replaceChildren(el('div', { class: 'notice notice-error', text: err.message }));
+    return;
+  }
+
+  let type = enc.type;
+  const error = el('div', { class: 'notice notice-error', style: 'display:none' });
+  const fields = identityFields(type, {
+    mrNumber: enc.patient.mrNumber,
+    name: enc.patient.name,
+    sex: enc.patient.sex,
+    dob: enc.patient.dob,
+    ageManual: enc.patient.ageManual,
+    admissionDate: enc.admissionDate,
+    dischargeDate: enc.dischargeDate,
+    careRole: enc.careRole,
+    careLeader: enc.careLeader,
+    ward: enc.ward,
+    diagnosis: enc.diagnosis,
+  });
+
+  const typeToggle = el(
+    'div',
+    { class: 'seg' },
+    ...['inpatient', 'outpatient'].map((value) =>
+      el(
+        'button',
+        {
+          type: 'button',
+          class: type === value ? 'on' : '',
+          onclick: (event) => {
+            type = value;
+            [...typeToggle.children].forEach((b) => b.classList.remove('on'));
+            event.currentTarget.classList.add('on');
+            fields.setType(type);
+          },
+        },
+        typeLabel(value)
+      )
+    )
+  );
+
+  const save = el('button', { class: 'btn btn-primary', type: 'submit' }, 'Save changes');
+  const savedNote = el('span', { class: 'sub', style: 'font-size:12.5px' });
+
+  const headTitle = el('h1', {});
+  const headSub = el('p', { class: 'sub' });
+  function refreshHead() {
+    headTitle.textContent = enc.patient.name;
+    headSub.textContent = [
+      enc.patient.mrNumber,
+      enc.patient.sex === 'M' ? 'Male' : 'Female',
+      enc.age !== null ? `${enc.age} y` : null,
+      typeLabel(enc.type),
+      prettyDate(enc.admissionDate),
+      CARE_STATUS[enc.careRole] ? CARE_STATUS[enc.careRole].long(enc.careLeader) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+
+  const identityCard = el(
+    'form',
+    {
+      class: 'card',
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        const problem = fields.validate();
+        if (problem) {
+          error.textContent = problem;
+          error.style.display = '';
+          return;
+        }
+        save.disabled = true;
+        save.textContent = 'Saving…';
+        try {
+          const updated = await api(`/api/encounters/${id}`, {
+            method: 'PATCH',
+            body: { ...fields.value(), type },
+          });
+          enc = updated;
+          refreshHead();
+          savedNote.textContent = `Saved ${new Date().toLocaleTimeString()}`;
+          toast('Changes saved.');
+        } catch (err) {
+          error.textContent = err.message;
+          error.style.display = '';
+        } finally {
+          save.disabled = false;
+          save.textContent = 'Save changes';
+        }
+      },
+    },
+    el('div', { class: 'row', style: 'margin-bottom:14px' }, el('h2', { style: 'margin:0', text: 'Identity page' }), el('div', { class: 'spacer' }), typeToggle),
+    error,
+    fields.node,
+    el('div', { class: 'row', style: 'margin-top:4px' }, save, savedNote),
+    el(
+      'div',
+      { style: 'margin-top:18px;padding-top:14px;border-top:1px solid var(--border)' },
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'btn btn-sm btn-danger',
+          onclick: async () => {
+            const total = Object.values(enc.attachmentCounts).reduce((a, b) => a + b, 0);
+            const warning =
+              `Delete this record for ${enc.patient.name} (${enc.patient.mrNumber})?` +
+              (total ? `\n\n${total} stored page${total === 1 ? '' : 's'} will be permanently deleted.` : '') +
+              '\n\nThis cannot be undone.';
+            if (!confirm(warning)) return;
+            try {
+              await api(`/api/encounters/${id}`, { method: 'DELETE' });
+              toast('Record deleted.');
+              location.hash = `#/${type}`;
+            } catch (err) {
+              toast(err.message, true);
+            }
+          },
+        },
+        'Delete this record'
+      )
+    )
+  );
+
+  const pane = el('div', { class: 'card' });
+  const tabs = el('div', { class: 'tabs' });
+  // Owned by the view, not by renderPane: an upload finishing re-renders the
+  // pane, and a host rebuilt in there would be detached mid-batch, leaving every
+  // page after the first uploading into nothing you can see.
+  const uploads = el('div');
+  let active = CATEGORIES[1].key;
+
+  /**
+   * The pages of one section, newest first. The server stores them in page order
+   * (page 1 first) and the numbering follows that, so a five-page chart reads
+   * 5, 4, 3, 2, 1 — today's page is at the top where the ward needs it, without
+   * renumbering the chart.
+   */
+  function displayShots(category) {
+    return enc.attachments.filter((a) => a.category === category).reverse();
+  }
+
+  function renderTabs() {
+    tabs.replaceChildren(
+      ...CATEGORIES.map((cat) => {
+        const n = enc.attachments.filter((a) => a.category === cat.key).length;
+        return el(
+          'button',
+          {
+            type: 'button',
+            class: active === cat.key ? 'on' : '',
+            onclick: () => {
+              active = cat.key;
+              renderTabs();
+              renderPane();
+            },
+          },
+          cat.label,
+          el('span', { class: 'count', text: String(n) })
+        );
+      })
+    );
+  }
+
+  function renderPane() {
+    const shots = displayShots(active);
+    const gallery = shots.length
+      ? el('div', { class: 'gallery' }, ...shots.map((a, i) => shotCard(a, shots, i)))
+      : el(
+          'div',
+          { class: 'empty' },
+          el('p', { text: `No ${CATEGORIES.find((c) => c.key === active).label.toLowerCase()} pages yet.` }),
+          el('p', { style: 'font-size:13px', text: 'Photograph the page and drop it above.' })
+        );
+
+    const orderHint =
+      shots.length > 1
+        ? el('p', {
+            class: 'sub',
+            style: 'margin:0 0 10px;font-size:12.5px',
+            text: 'Newest page first. The number is the page number. Drag by ⠿ to move one, or use ← →.',
+          })
+        : null;
+
+    pane.replaceChildren(dropZone(active), uploads, ...(orderHint ? [orderHint] : []), gallery);
+  }
+
+  function dropZone(category) {
+    const picker = el('input', { type: 'file', accept: ACCEPT, multiple: true, style: 'display:none' });
+    const camera = el('input', { type: 'file', accept: 'image/*', capture: 'environment', multiple: true, style: 'display:none' });
+
+    const zone = el(
+      'div',
+      { class: 'drop' },
+      el('p', { style: 'margin:0 0 10px;font-size:13.5px', text: 'Drop photos here, or' }),
+      el(
+        'div',
+        { class: 'row' },
+        el('button', { type: 'button', class: 'btn btn-sm', onclick: () => picker.click() }, 'Choose files'),
+        el('button', { type: 'button', class: 'btn btn-sm', onclick: () => camera.click() }, 'Take photo'),
+        picker,
+        camera
+      ),
+      el('div', {
+        class: 'field-hint',
+        style: 'margin-top:10px',
+        text: 'JPEG, PNG, WebP, HEIC or PDF.',
+      })
+    );
+
+    const handle = (files) => queueUploads([...files], category);
+    picker.addEventListener('change', () => { handle(picker.files); picker.value = ''; });
+    camera.addEventListener('change', () => { handle(camera.files); camera.value = ''; });
+
+    zone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      zone.classList.add('over');
+    });
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      zone.classList.remove('over');
+      if (event.dataTransfer?.files?.length) handle(event.dataTransfer.files);
+    });
+
+    return zone;
+  }
+
+  async function queueUploads(files, category) {
+    // Pages are stored in the order they upload, and a phone's picker hands a
+    // multi-selection back in whatever order it likes. Sorting by capture time
+    // keeps the chart in the order it was photographed. Equal or missing
+    // timestamps keep the order they were handed over in.
+    const ordered = [...files].sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+
+    // Every page in the batch gets its row up front. Uploading is still one at a
+    // time — a ward phone on hospital wifi does not thank you for six parallel
+    // 3 MB posts — but you can see the whole queue rather than one lone bar with
+    // no way to tell whether it means this page or all of them.
+    const summary = el('div', { class: 'upload-summary' });
+    const batch = el('div', { class: 'upload-batch' }, summary);
+    const rows = ordered.map((file) => {
+      const bar = el('i', { style: 'width:0%' });
+      const status = el('span', { class: 'upload-status', text: 'waiting' });
+      const row = el(
+        'div',
+        { class: 'upload-row' },
+        el('span', { class: 'upload-name', text: file.name }),
+        el('div', { class: 'bar' }, bar),
+        status
+      );
+      batch.append(row);
+      return { file, row, bar, status };
+    });
+    uploads.append(batch);
+
+    let finished = 0;
+    let failed = 0;
+    const total = rows.length;
+    const page = (n) => `${n} page${n === 1 ? '' : 's'}`;
+    const setSummary = (current) => {
+      summary.textContent =
+        finished + failed === total
+          ? failed
+            ? `${page(finished)} saved, ${failed} failed — the failed ones were not stored.`
+            : `${page(finished)} saved.`
+          : `Uploading ${page(total)} — ${finished + failed + 1} of ${total}${current ? `: ${current}` : ''}`;
+    };
+    setSummary();
+
+    for (const item of rows) {
+      item.row.classList.add('active');
+      item.status.textContent = 'preparing…';
+      setSummary(item.file.name);
+      try {
+        const prepared = state.compress ? await shrinkImage(item.file) : item.file;
+        const size = formatBytes(prepared.size);
+        const created = await uploadOne(prepared, item.file.name, category, (pct) => {
+          item.bar.style.width = `${Math.max(3, pct)}%`;
+          item.status.textContent = `${Math.round(pct)}%`;
+        });
+        enc.attachments.push(created);
+        item.bar.style.width = '100%';
+        item.row.classList.remove('active');
+        item.row.classList.add('done');
+        item.status.textContent = `saved · ${size}`;
+        finished += 1;
+        renderTabs();
+        renderPane();
+      } catch (err) {
+        item.row.classList.remove('active');
+        item.row.classList.add('failed');
+        item.status.textContent = err.message;
+        item.bar.style.width = '100%';
+        failed += 1;
+        toast(`${item.file.name}: ${err.message}`, true);
+      }
+      setSummary();
+    }
+
+    // A clean batch clears itself; a batch with failures stays put so the pages
+    // that did not save can be seen and retried.
+    if (!failed) setTimeout(() => batch.remove(), 2500);
+  }
+
+  function uploadOne(blob, filename, category, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/encounters/${id}/attachments`);
+      xhr.setRequestHeader('Content-Type', blob.type || 'application/octet-stream');
+      xhr.setRequestHeader('X-Category', category);
+      xhr.setRequestHeader('X-Filename', encodeURIComponent(filename));
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) onProgress((event.loaded / event.total) * 100);
+      });
+      xhr.addEventListener('load', () => {
+        let data = {};
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch { /* fall through to status check */ }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new Error(data.error || `Upload failed (${xhr.status})`));
+      });
+      xhr.addEventListener('error', () => reject(new Error('Network error during upload.')));
+      xhr.send(blob);
+    });
+  }
+
+  /**
+   * Moves one page within its own section and persists the new order. The move
+   * is applied on screen first — waiting for the round trip makes tapping the
+   * arrows on a ward phone feel broken.
+   */
+  function moveShot(category, from, to) {
+    const shown = displayShots(category);
+    if (from === to || from < 0 || to < 0 || to >= shown.length) return;
+    shown.splice(to, 0, ...shown.splice(from, 1));
+    // Back to page order to store it: the gallery reads newest first, the record
+    // is kept page 1 first. Each pane filters by category, so only the order
+    // within this one matters.
+    const pageOrder = [...shown].reverse();
+    enc.attachments = [...enc.attachments.filter((a) => a.category !== category), ...pageOrder];
+    renderPane();
+    saveOrder(category, pageOrder.map((a) => a.id));
+  }
+
+  async function saveOrder(category, ids) {
+    try {
+      const data = await api(`/api/encounters/${id}/attachments/order`, {
+        method: 'POST',
+        body: { category, ids },
+      });
+      enc.attachments = data.attachments;
+    } catch (err) {
+      toast(err.message, true);
+      // The order on screen is now a claim the server never accepted. Pull the
+      // record back rather than leave the two disagreeing.
+      try {
+        enc = await api(`/api/encounters/${id}`);
+      } catch {
+        /* offline — the next load will show what actually stuck */
+      }
+    }
+    renderTabs();
+    renderPane();
+  }
+
+  function shotCard(att, siblings, index) {
+    const caption = el('input', {
+      class: 'shot-cap',
+      type: 'text',
+      value: att.caption,
+      placeholder: 'Add a note…',
+      onchange: async (event) => {
+        try {
+          await api(`/api/attachments/${att.id}`, { method: 'PATCH', body: { caption: event.target.value } });
+          att.caption = event.target.value;
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    });
+
+    const preview =
+      att.mime === 'application/pdf'
+        ? el(
+            'button',
+            { class: 'shot-pdf', type: 'button', onclick: () => openLightbox(siblings, index) },
+            el('span', { style: 'font-size:22px', text: '📄' }),
+            el('span', { text: 'PDF' })
+          )
+        : el('img', {
+            class: 'shot-img',
+            src: att.url,
+            alt: att.caption || att.originalName,
+            loading: 'lazy',
+            onclick: () => openLightbox(siblings, index),
+          });
+
+    const card = el('div', { class: 'shot', dataset: { attId: String(att.id) } });
+
+    const moveButton = (delta, glyph, hint) =>
+      el(
+        'button',
+        {
+          type: 'button',
+          title: hint,
+          'aria-label': hint,
+          disabled: delta < 0 ? index === 0 : index === siblings.length - 1,
+          onclick: () => moveShot(att.category, index, index + delta),
+        },
+        glyph
+      );
+
+    const grab = el('span', { class: 'shot-grab', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿');
+
+    // Pointer events, not HTML5 drag-and-drop: dragstart and drop are never fired
+    // by a finger, so the handle did nothing at all on the phones this is used
+    // from. One path now covers mouse, pen and touch.
+    grab.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      let over = null;
+      let edgeSpeed = 0;
+      const clearOver = () => {
+        if (over) over.classList.remove('drop-target');
+        over = null;
+      };
+
+      // A phone shows two pages at a time, so without this you could only ever
+      // drop onto something already on screen.
+      const scroller = setInterval(() => {
+        if (edgeSpeed) window.scrollBy(0, edgeSpeed);
+      }, 16);
+
+      const onMove = (moveEvent) => {
+        const margin = 90;
+        edgeSpeed =
+          moveEvent.clientY < margin ? -11
+          : moveEvent.clientY > window.innerHeight - margin ? 11
+          : 0;
+
+        const under = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+        const target = under && under.closest ? under.closest('.shot') : null;
+        if (target === over) return;
+        clearOver();
+        if (target && target !== card && pane.contains(target)) {
+          over = target;
+          over.classList.add('drop-target');
+        }
+      };
+
+      const end = (endEvent) => {
+        clearInterval(scroller);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', end);
+        window.removeEventListener('pointercancel', end);
+        card.classList.remove('dragging');
+        const target = over;
+        clearOver();
+        if (!target || endEvent.type !== 'pointerup') return;
+        const shown = displayShots(att.category);
+        const from = shown.findIndex((a) => a.id === att.id);
+        const to = shown.findIndex((a) => String(a.id) === target.dataset.attId);
+        if (from >= 0 && to >= 0) moveShot(att.category, from, to);
+      };
+
+      card.classList.add('dragging');
+      // Capture keeps the events coming if the finger leaves the handle, but the
+      // listeners sit on the window so the drag still works where it is refused.
+      try {
+        grab.setPointerCapture(event.pointerId);
+      } catch {
+        /* no capture available — the window listeners below carry the drag */
+      }
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', end);
+      window.addEventListener('pointercancel', end);
+    });
+
+    const orderBar =
+      siblings.length > 1
+        ? el(
+            'div',
+            { class: 'shot-order' },
+            moveButton(-1, '←', 'Move this page up the list'),
+            moveButton(1, '→', 'Move this page down the list'),
+            grab
+          )
+        : null;
+
+    card.append(
+      preview,
+      // The number is the page number, counted from the first page of the chart.
+      // The list runs newest first, so these count down.
+      el('span', { class: 'shot-num', text: String(siblings.length - index) }),
+      ...(orderBar ? [orderBar] : []),
+      el(
+        'div',
+        { class: 'shot-foot' },
+        caption,
+        el(
+          'div',
+          { class: 'shot-sub' },
+          el('span', { text: formatBytes(att.size) }),
+          el(
+            'button',
+            {
+              class: 'shot-del',
+              type: 'button',
+              onclick: async () => {
+                if (!confirm('Delete this page? This cannot be undone.')) return;
+                try {
+                  await api(`/api/attachments/${att.id}`, { method: 'DELETE' });
+                  enc.attachments = enc.attachments.filter((a) => a.id !== att.id);
+                  renderTabs();
+                  renderPane();
+                  toast('Page deleted.');
+                } catch (err) {
+                  toast(err.message, true);
+                }
+              },
+            },
+            'Delete'
+          )
+        )
+      )
+    );
+
+    return card;
+  }
+
+  const compressToggle = el('input', { type: 'checkbox', id: 'cmp', checked: state.compress });
+  compressToggle.addEventListener('change', () => {
+    state.compress = compressToggle.checked;
+    localStorage.setItem('emr.compress', state.compress ? 'on' : 'off');
+  });
+
+  refreshHead();
+  renderTabs();
+  renderPane();
+
+  container.replaceChildren(
+    el(
+      'div',
+      { class: 'page-head' },
+      el('div', {}, headTitle, headSub),
+      el('a', { class: 'btn btn-ghost', href: `#/${enc.type}` }, '← Back to list')
+    ),
+    el(
+      'div',
+      { class: 'detail' },
+      identityCard,
+      el(
+        'div',
+        {},
+        el(
+          'div',
+          { class: 'row', style: 'margin-bottom:10px' },
+          el('h2', { style: 'margin:0', text: 'Scanned pages' }),
+          el('div', { class: 'spacer' }),
+          el('div', { class: 'check' }, compressToggle, el('label', { for: 'cmp', text: 'Shrink photos before upload' }))
+        ),
+        tabs,
+        pane
+      )
+    )
+  );
+}
+
+// ---------------------------------------------------------- image shrinking
+
+/**
+ * Phone photos are 4–12 MB each and a chart is many pages. Re-encoding to a
+ * 2600 px long edge keeps handwriting legible while cutting storage roughly
+ * tenfold. Anything the browser cannot decode (HEIC, PDF) passes through
+ * untouched so nothing is ever lost.
+ */
+async function shrinkImage(file, maxDim = 2600, quality = 0.9) {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return file;
+  if (file.size < 900 * 1024) return file;
+
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return file;
+  }
+
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  if (scale === 1 && file.size < 2.5 * 1024 * 1024) {
+    bitmap.close();
+    return file;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+  if (!blob || blob.size >= file.size) return file;
+  return blob;
+}
+
+// ------------------------------------------------------------------ lightbox
+
+function openLightbox(items, startIndex) {
+  let index = startIndex;
+  let zoomed = false;
+
+  const stage = el('div', { class: 'lightbox-stage' });
+  const label = el('span', {});
+  const box = el(
+    'div',
+    { class: 'lightbox' },
+    el(
+      'div',
+      { class: 'lightbox-bar' },
+      el('button', { type: 'button', onclick: () => step(-1) }, '‹ Prev'),
+      el('button', { type: 'button', onclick: () => step(1) }, 'Next ›'),
+      label,
+      el('div', { class: 'spacer', style: 'flex:1' }),
+      el('a', { class: 'btn btn-sm', id: 'lb-open', target: '_blank', rel: 'noopener' }, 'Open full size'),
+      el('button', { type: 'button', onclick: close }, 'Close ✕')
+    ),
+    stage
+  );
+
+  function draw() {
+    const item = items[index];
+    label.textContent = `${index + 1} / ${items.length}${item.caption ? ` — ${item.caption}` : ''}`;
+    box.querySelector('#lb-open').href = item.url;
+    zoomed = false;
+    if (item.mime === 'application/pdf') {
+      stage.replaceChildren(el('iframe', { src: item.url, title: item.originalName }));
+    } else {
+      const img = el('img', {
+        src: item.url,
+        alt: item.caption || item.originalName,
+        onclick: () => {
+          zoomed = !zoomed;
+          img.classList.toggle('zoomed', zoomed);
+        },
+      });
+      stage.replaceChildren(img);
+    }
+    stage.scrollTop = 0;
+  }
+
+  function step(delta) {
+    index = (index + delta + items.length) % items.length;
+    draw();
+  }
+
+  function onKey(event) {
+    if (event.key === 'Escape') close();
+    else if (event.key === 'ArrowRight') step(1);
+    else if (event.key === 'ArrowLeft') step(-1);
+  }
+
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    box.remove();
+  }
+
+  document.addEventListener('keydown', onKey);
+  document.body.append(box);
+  draw();
+}
+
+// ------------------------------------------------------------- report view
+
+function reportView() {
+  const container = el('div');
+  shell(container);
+
+  let type = 'inpatient';
+  const from = el('input', { type: 'date', value: state.defaultRange.from });
+  const to = el('input', { type: 'date', value: state.defaultRange.to });
+  const dateFormat = el(
+    'select',
+    {},
+    el('option', { value: 'iso' }, 'YYYY-MM-DD'),
+    el('option', { value: 'dmy' }, 'DD/MM/YYYY')
+  );
+  const flatten = el('input', { type: 'checkbox', id: 'flat' });
+  const includeMr = el('input', { type: 'checkbox', id: 'mr' });
+
+  const preview = el('div');
+  const count = el('div', { class: 'sub' });
+
+  const typeToggle = el(
+    'div',
+    { class: 'seg' },
+    ...['inpatient', 'outpatient'].map((value) =>
+      el(
+        'button',
+        {
+          type: 'button',
+          class: type === value ? 'on' : '',
+          onclick: (event) => {
+            type = value;
+            [...typeToggle.children].forEach((b) => b.classList.remove('on'));
+            event.currentTarget.classList.add('on');
+            load();
+          },
+        },
+        typeLabel(value, true)
+      )
+    )
+  );
+
+  function shiftMonth(delta) {
+    const base = new Date(`${from.value || state.defaultRange.from}T00:00:00`);
+    const target = new Date(base.getFullYear(), base.getMonth() + delta, 1);
+    const last = new Date(target.getFullYear(), target.getMonth() + 1, 0);
+    const iso = (d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    from.value = iso(target);
+    to.value = iso(last);
+    load();
+  }
+
+  function params() {
+    const p = new URLSearchParams({ type, from: from.value, to: to.value, dateFormat: dateFormat.value });
+    if (flatten.checked) p.set('flatten', '1');
+    if (includeMr.checked) p.set('includeMr', '1');
+    return p;
+  }
+
+  async function load() {
+    preview.replaceChildren(el('div', { class: 'sub', text: 'Building preview…' }));
+    try {
+      const report = await api(`/api/report?${params()}`);
+      count.textContent = `${report.rows.length} ${typeLabel(type, report.rows.length !== 1).toLowerCase()} between ${prettyDate(report.from)} and ${prettyDate(report.to)}`;
+      if (!report.rows.length) {
+        preview.replaceChildren(
+          el('div', { class: 'empty' }, el('p', { text: 'No records in this period.' }), el('p', { style: 'font-size:13px', text: 'Try a wider date range or the other patient type.' }))
+        );
+        return;
+      }
+      const table = el(
+        'table',
+        {},
+        el('thead', {}, el('tr', {}, ...report.header.map((h) => el('th', { text: h })))),
+        el(
+          'tbody',
+          {},
+          ...report.rows.slice(0, 300).map((row) =>
+            el(
+              'tr',
+              {},
+              ...row.map((cell, i) => {
+                const name = report.header[i];
+                const cls = name === 'Dx' ? 'dx' : name === 'No' ? 'num' : name === 'Admission Date' ? 'nowrap' : '';
+                return el('td', { class: cls, text: cell });
+              })
+            )
+          )
+        )
+      );
+      const parts = [el('div', { class: 'report-table-wrap' }, table)];
+      if (report.rows.length > 300) {
+        parts.push(
+          el('p', {
+            class: 'sub',
+            style: 'margin-top:8px',
+            text: `Preview shows the first 300 rows — the CSV contains all ${report.rows.length}.`,
+          })
+        );
+      }
+      preview.replaceChildren(...parts);
+    } catch (err) {
+      preview.replaceChildren(el('div', { class: 'notice notice-error', text: err.message }));
+    }
+  }
+
+  [from, to, dateFormat].forEach((input) => input.addEventListener('change', load));
+  [flatten, includeMr].forEach((input) => input.addEventListener('change', load));
+
+  container.replaceChildren(
+    el(
+      'div',
+      { class: 'page-head' },
+      el(
+        'div',
+        {},
+        el('h1', { text: 'Create a report' }),
+        el('p', { class: 'sub', text: 'Export a patient register to CSV. Defaults to the current month.' })
+      ),
+      typeToggle
+    ),
+    el(
+      'div',
+      { class: 'card', style: 'margin-bottom:18px' },
+      el(
+        'div',
+        { class: 'grid-3' },
+        el('div', { class: 'field' }, el('label', { text: 'From' }), from),
+        el('div', { class: 'field' }, el('label', { text: 'To' }), to),
+        el('div', { class: 'field' }, el('label', { text: 'Date format in CSV' }), dateFormat)
+      ),
+      el(
+        'div',
+        { class: 'row', style: 'margin-bottom:14px' },
+        el('button', { type: 'button', class: 'btn btn-sm', onclick: () => shiftMonth(-1) }, '← Previous month'),
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-sm',
+            onclick: () => {
+              from.value = state.defaultRange.from;
+              to.value = state.defaultRange.to;
+              load();
+            },
+          },
+          'This month'
+        ),
+        el('button', { type: 'button', class: 'btn btn-sm', onclick: () => shiftMonth(1) }, 'Next month →')
+      ),
+      el(
+        'div',
+        { class: 'row', style: 'gap:20px;margin-bottom:16px' },
+        el('div', { class: 'check' }, flatten, el('label', { for: 'flat', text: 'Put each diagnosis on one line (separated by ;)' })),
+        el('div', { class: 'check' }, includeMr, el('label', { for: 'mr', text: 'Include MR number column' }))
+      ),
+      el(
+        'div',
+        { class: 'row' },
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-primary',
+            onclick: () => {
+              window.location.href = `/api/report.csv?${params()}`;
+              toast('CSV download started.');
+            },
+          },
+          '⬇ Download CSV'
+        ),
+        el('button', { type: 'button', class: 'btn', onclick: () => window.print() }, 'Print preview'),
+        count
+      )
+    ),
+    preview
+  );
+
+  load();
+}
+
+// ------------------------------------------------------------ account view
+
+async function accountView() {
+  const container = el('div');
+  shell(container);
+  container.replaceChildren(el('div', { class: 'sub', text: 'Loading account…' }));
+
+  let me;
+  try {
+    me = await api('/api/account');
+  } catch (err) {
+    container.replaceChildren(el('div', { class: 'notice notice-error', text: err.message }));
+    return;
+  }
+
+  const blocks = [
+    el(
+      'div',
+      { class: 'page-head' },
+      el(
+        'div',
+        {},
+        el('h1', { text: 'Your account' }),
+        el('p', {
+          class: 'sub',
+          text: `Signed in as ${me.username}${me.role === 'admin' ? ' — administrator' : ''}.`,
+        })
+      )
+    ),
+    profileCard(me),
+    passwordCard(),
+  ];
+
+  if (me.role === 'admin') blocks.push(await peopleCard(me));
+
+  container.replaceChildren(...blocks);
+}
+
+function profileCard(me) {
+  const fullName = el('input', { type: 'text', value: me.fullName, placeholder: 'Your name' });
+  const note = el('span', { class: 'sub', style: 'font-size:12.5px' });
+
+  return el(
+    'form',
+    {
+      class: 'card',
+      style: 'max-width:620px;margin-bottom:18px',
+      onsubmit: async (event) => {
+        event.preventDefault();
+        try {
+          const updated = await api('/api/account', {
+            method: 'PATCH',
+            body: { fullName: fullName.value },
+          });
+          state.user = { ...state.user, fullName: updated.fullName };
+          note.textContent = 'Saved.';
+          toast('Name updated.');
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    },
+    el('h2', { text: 'Profile' }),
+    el(
+      'div',
+      { class: 'grid-2' },
+      el('div', { class: 'field' }, el('label', { text: 'Display name' }), fullName),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { text: 'Username' }),
+        el('input', { type: 'text', value: me.username, disabled: true }),
+        el('div', { class: 'field-hint', text: 'Usernames cannot be changed.' })
+      )
+    ),
+    el(
+      'p',
+      { class: 'sub', style: 'font-size:12.5px;margin:0 0 12px' },
+      me.passwordChangedAt
+        ? `Password last changed ${prettyDate(me.passwordChangedAt.slice(0, 10))}.`
+        : 'Password has not been changed since the account was created.'
+    ),
+    el('div', { class: 'row' }, el('button', { class: 'btn', type: 'submit' }, 'Save name'), note)
+  );
+}
+
+function passwordCard() {
+  const error = el('div', { class: 'notice notice-error', style: 'display:none' });
+  const current = el('input', { type: 'password', autocomplete: 'current-password' });
+  const next = el('input', { type: 'password', autocomplete: 'new-password' });
+  const confirm = el('input', { type: 'password', autocomplete: 'new-password' });
+  const button = el('button', { class: 'btn btn-primary', type: 'submit' }, 'Change password');
+
+  const fail = (message) => {
+    error.textContent = message;
+    error.style.display = '';
+  };
+
+  return el(
+    'form',
+    {
+      class: 'card',
+      style: 'max-width:620px;margin-bottom:18px',
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        if (next.value !== confirm.value) return fail('The two new passwords do not match.');
+        if (next.value.length < 10) return fail('The new password must be at least 10 characters.');
+
+        button.disabled = true;
+        button.textContent = 'Changing…';
+        try {
+          await api('/api/account/password', {
+            method: 'POST',
+            body: { currentPassword: current.value, newPassword: next.value },
+          });
+          current.value = next.value = confirm.value = '';
+          toast('Password changed. Other devices have been signed out.');
+        } catch (err) {
+          fail(err.message);
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Change password';
+        }
+      },
+    },
+    el('h2', { text: 'Change password' }),
+    error,
+    el('div', { class: 'field' }, el('label', { text: 'Current password' }), current),
+    el(
+      'div',
+      { class: 'grid-2' },
+      el('div', { class: 'field' }, el('label', { text: 'New password' }), next),
+      el('div', { class: 'field' }, el('label', { text: 'Confirm new password' }), confirm)
+    ),
+    el('div', {
+      class: 'notice notice-info',
+      text:
+        'Changing your password signs you out on every other phone, tablet and computer. ' +
+        'This browser stays signed in.',
+    }),
+    button
+  );
+}
+
+async function peopleCard(me) {
+  const card = el('div', { class: 'card', style: 'max-width:820px' });
+
+  async function render() {
+    let users = [];
+    try {
+      users = (await api('/api/users')).users;
+    } catch (err) {
+      card.replaceChildren(el('div', { class: 'notice notice-error', text: err.message }));
+      return;
+    }
+
+    const rows = users.map((u) =>
+      el(
+        'tr',
+        {},
+        el(
+          'td',
+          {},
+          el('div', { style: 'font-weight:600', text: u.fullName || u.username }),
+          el('div', { class: 'mr', text: u.username })
+        ),
+        el(
+          'td',
+          { class: 'nowrap' },
+          el(
+            'select',
+            {
+              disabled: u.id === me.id,
+              title: u.id === me.id ? 'You cannot change your own role.' : '',
+              onchange: async (event) => {
+                try {
+                  await api(`/api/users/${u.id}`, { method: 'PATCH', body: { role: event.target.value } });
+                  toast(`${u.username} is now ${event.target.value === 'admin' ? 'an administrator' : 'a standard user'}.`);
+                  render();
+                } catch (err) {
+                  toast(err.message, true);
+                  render();
+                }
+              },
+            },
+            el('option', { value: 'user', selected: u.role === 'user' }, 'Standard'),
+            el('option', { value: 'admin', selected: u.role === 'admin' }, 'Administrator')
+          )
+        ),
+        el('td', { class: 'nowrap sub', style: 'font-size:12.5px' },
+          u.passwordChangedAt ? prettyDate(u.passwordChangedAt.slice(0, 10)) : '—'),
+        el(
+          'td',
+          { class: 'nowrap' },
+          el(
+            'button',
+            {
+              class: 'btn btn-sm',
+              type: 'button',
+              onclick: () => promptSetPassword(u, render),
+            },
+            'Set password'
+          ),
+          ' ',
+          u.id === me.id
+            ? el('span', { class: 'sub', style: 'font-size:12px', text: 'you' })
+            : el(
+                'button',
+                {
+                  class: 'btn btn-sm btn-danger',
+                  type: 'button',
+                  onclick: async () => {
+                    if (!confirm(`Remove ${u.username}'s access?\n\nPatient records they created are not affected.`)) return;
+                    try {
+                      await api(`/api/users/${u.id}`, { method: 'DELETE' });
+                      toast(`${u.username} removed.`);
+                      render();
+                    } catch (err) {
+                      toast(err.message, true);
+                    }
+                  },
+                },
+                'Remove'
+              )
+        )
+      )
+    );
+
+    card.replaceChildren(
+      el('h2', { text: 'People with access' }),
+      el('p', {
+        class: 'sub',
+        style: 'margin:-8px 0 14px',
+        text: 'Everyone here can see and edit every patient record. Administrators can also manage this list.',
+      }),
+      el(
+        'div',
+        { class: 'report-table-wrap', style: 'margin-bottom:18px' },
+        el(
+          'table',
+          {},
+          el('thead', {}, el('tr', {},
+            el('th', { text: 'Person' }),
+            el('th', { text: 'Role' }),
+            el('th', { text: 'Password set' }),
+            el('th', { text: '' })
+          )),
+          el('tbody', {}, ...rows)
+        )
+      ),
+      addPersonForm(render)
+    );
+  }
+
+  await render();
+  return card;
+}
+
+function addPersonForm(onDone) {
+  const error = el('div', { class: 'notice notice-error', style: 'display:none' });
+  const fullName = el('input', { type: 'text', placeholder: 'Dr Siti' });
+  const username = el('input', { type: 'text', placeholder: 'drsiti' });
+  const password = el('input', { type: 'password', autocomplete: 'new-password' });
+  const role = el(
+    'select',
+    {},
+    el('option', { value: 'user' }, 'Standard'),
+    el('option', { value: 'admin' }, 'Administrator')
+  );
+  const button = el('button', { class: 'btn btn-primary', type: 'submit' }, 'Add person');
+
+  return el(
+    'form',
+    {
+      style: 'border-top:1px solid var(--border);padding-top:16px',
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        button.disabled = true;
+        try {
+          await api('/api/users', {
+            method: 'POST',
+            body: {
+              username: username.value.trim().toLowerCase(),
+              password: password.value,
+              fullName: fullName.value,
+              role: role.value,
+            },
+          });
+          toast(`${username.value.trim().toLowerCase()} can now sign in.`);
+          fullName.value = username.value = password.value = '';
+          onDone();
+        } catch (err) {
+          error.textContent = err.message;
+          error.style.display = '';
+        } finally {
+          button.disabled = false;
+        }
+      },
+    },
+    el('h2', { text: 'Add someone' }),
+    error,
+    el(
+      'div',
+      { class: 'grid-2' },
+      el('div', { class: 'field' }, el('label', { text: 'Name' }), fullName),
+      el('div', { class: 'field' }, el('label', { text: 'Username' }), username)
+    ),
+    el(
+      'div',
+      { class: 'grid-2' },
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { text: 'Temporary password' }),
+        password,
+        el('div', { class: 'field-hint', text: 'At least 10 characters. Tell them to change it once they sign in.' })
+      ),
+      el('div', { class: 'field' }, el('label', { text: 'Role' }), role)
+    ),
+    button
+  );
+}
+
+async function promptSetPassword(user, onDone) {
+  const value = prompt(
+    `Set a new password for ${user.username}.\n\nAt least 10 characters. They will be signed out everywhere.`
+  );
+  if (value === null) return;
+  if (value.length < 10) {
+    toast('Password must be at least 10 characters.', true);
+    return;
+  }
+  try {
+    await api(`/api/users/${user.id}/password`, { method: 'POST', body: { newPassword: value } });
+    toast(`Password set for ${user.username}.`);
+    onDone();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// -------------------------------------------------------------------- router
+
+function route() {
+  if (!state.user) return renderGate();
+
+  const hash = location.hash || '#/inpatient';
+  const detail = hash.match(/^#\/e\/(\d+)/);
+  const fresh = hash.match(/^#\/new\/(inpatient|outpatient)/);
+
+  if (detail) return detailView(Number(detail[1]));
+  if (fresh) return newView(fresh[1]);
+  if (hash.startsWith('#/outpatient')) return listView('outpatient');
+  if (hash.startsWith('#/reports')) return reportView();
+  if (hash.startsWith('#/account')) return accountView();
+  if (hash.startsWith('#/inpatient')) return listView('inpatient');
+
+  location.hash = '#/inpatient';
+}
+
+async function bootstrap() {
+  const data = await api('/api/bootstrap');
+  state.user = data.user;
+  state.needsSetup = data.needsSetup;
+  state.today = data.today;
+  state.defaultRange = data.defaultRange;
+}
+
+window.addEventListener('hashchange', route);
+
+bootstrap()
+  .then(route)
+  .catch((err) => {
+    root.replaceChildren(
+      el('div', { class: 'gate' }, el('div', { class: 'card notice notice-error', text: `Cannot reach the server: ${err.message}` }))
+    );
+  });

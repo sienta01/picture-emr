@@ -1,0 +1,15 @@
+{
+  "name": "picture-emr",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Photo-based electronic medical record for hospitals still running on paper charts.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "backup": "node scripts/backup.js",
+    "reset-password": "node scripts/reset-password.js"
+  }
+}
